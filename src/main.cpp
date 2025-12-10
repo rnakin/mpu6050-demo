@@ -16,10 +16,10 @@
 #define GYRO_THRESHOLD 0.5
 
 // MQTT
-const char *mqtt_server = ""; // broker URL
+const char *mqtt_server =""; // broker URL
 const int mqtt_port = 8883;
-const char *INTERVAL_PUBLISH_TOPIC = "";
-const char *EVENT_PUBLISH_TOPIC = "";
+const char *INTERVAL_PUBLISH_TOPIC = "/raw_data";
+const char *EVENT_PUBLISH_TOPIC = "/event";
 const char *mqtt_user = "";
 const char *mqtt_password = "";
 const int MQTT_RETRY_COOLDOWN = 2000; // in case mqtt fail to connect cool down (ms)
@@ -28,7 +28,7 @@ const int MQTT_RETRY_COOLDOWN = 2000; // in case mqtt fail to connect cool down 
 
 const char *rootCACertificate = R"EOF(
 -----BEGIN CERTIFICATE-----
-Root Certificates goes here
+
 -----END CERTIFICATE-----
 )EOF";
 
@@ -89,7 +89,7 @@ void reconnect() {
 // MPU Event struct
 struct MpuEvent {
   sensors_event_t acceleration;
-  sensors_event_t gyro;
+  sensors_event_t gyro;//rotation
 };
 
 // Globals
@@ -141,6 +141,9 @@ void collectData() {
     return;
   }
   sampleMPU6050()
+
+  // clear sum
+  if (sample_count>=5){
   acc_x_avg_global = (acc_x_sum / sample_count) - acc_x_calibrate_offset;
   acc_y_avg_global = (acc_y_sum / sample_count) - acc_y_calibrate_offset;
   acc_z_avg_global = (acc_z_sum / sample_count) - acc_z_calibrate_offset;
@@ -149,25 +152,10 @@ void collectData() {
   gyro_y_avg_global = (gyro_y_sum / sample_count) - gyro_y_calibrate_offset;
   gyro_z_avg_global = (gyro_z_sum / sample_count) - gyro_z_calibrate_offset;
 
-  Serial.print("Acc X: ");
-  Serial.print(acc_x_avg_global);
-  Serial.print(", Y: ");
-  Serial.print(acc_y_avg_global);
-  Serial.print(", Z: ");
-  Serial.println(acc_z_avg_global);
-
-  Serial.print("Gyro X: ");
-  Serial.print(gyro_x_avg_global);
-  Serial.print(", Y: ");
-  Serial.print(gyro_y_avg_global);
-  Serial.print(", Z: ");
-  Serial.println(gyro_z_avg_global);
-  Serial.println();
-
-  // clear sum
   acc_x_sum = acc_y_sum = acc_z_sum = 0;
   gyro_x_sum = gyro_y_sum = gyro_z_sum = 0;
   sample_count = 0;
+  }
 }
 
 void calibration(int samples = 100) {
@@ -218,7 +206,7 @@ void calibration(int samples = 100) {
 void setup() {
   Serial.begin(9600);
   // Connect to WiFi
-  WiFi.begin();
+  WiFi.begin("nmvg", "pinPoint08");
   Serial.print("Connecting to WiFi");
   while (WiFi.status() != WL_CONNECTED) {
     Serial.print(".");
@@ -279,27 +267,27 @@ void sendEventMQTT(String change, String direction, float value,
     else if (direction == "Y" && value > 0)
       event = "rotation_roll_cw";
     else if (direction == "Y" && value < 0)
-      event = "rotation_rool_ccw";
+      event = "rotation_roll_ccw";
     else if (direction == "Z" && value > 0)
       event = "rotation_yaw_left";
     else if (direction == "Z" && value < 0)
       event = "rotation_yaw_right";
   }
 
-  JsonDocument doc;
-  doc["device_id"] = DEVICE_ID;
+  JsonDocument doc; //from Arduino json
+  doc["device_id"] = DEVICE_ID;//1
   doc["event"] = event;
   doc["type"] = change;
   doc["direction"] = direction;
   doc["value"] = value;
-  doc["timestamp"] = getBsonUtcMillis();
+  doc["timestamp"] = getBsonUtcMillis(); 
   doc["timestring"] = getTimeString();
 
   char jsonString[256];
   serializeJson(doc, jsonString);
 
   client.publish(EVENT_PUBLISH_TOPIC, jsonString);
-  Serial.printf("Data published to MQTT in topic %s", INTERVAL_PUBLISH_TOPIC);
+  Serial.printf("Data published to MQTT in topic %s", EVENT_PUBLISH_TOPIC);
   Serial.println(jsonString);
   client.loop();
 }
@@ -390,7 +378,7 @@ void print5SReport() {
   Serial.println("------------------------");
 }
 
-void calculateAveragesAndStore() {
+void sendDataToStore() {
   // Build JSON
   JsonDocument doc;
   doc["device_id"] = DEVICE_ID;
@@ -470,14 +458,14 @@ void loop() {
 
   listenToEvent(); // this also include watch for event change
 
-  if (now - last_average_time >= AVERAGE_INTERVAL) {
+  if (now - last_average_time >= AVERAGE_INTERVAL) {// 1S
     last_average_time = now;
     collectData();
   }
 
-  if (now - last_output_time >= OUTPUT_INTERVAL) {
+  if (now - last_output_time >= OUTPUT_INTERVAL) {// 5S
     last_output_time = now;
-    calculateAveragesAndStore();
+    sendDataToStore();
     if (DEBUG_MODE) {
       print5SReport();
     }
